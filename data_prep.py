@@ -1,6 +1,40 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+
+# function to clean
+def clean_data(df):
+    """
+    Person 1's full cleaning pipeline - returns cleaned df
+    """
+    # Filter Active
+    df_clean = df[df['Company Status (Active/Inactive)'] == 'Active'].copy()
+
+    # Golden cols imputation
+    golden_cols = ['Revenue (USD)', 'Employees Total', 'IT Budget', 'Year Found']
+    for col in golden_cols:
+        if col in df_clean.columns:
+            df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+            df_clean[col] = df_clean[col].fillna(df_clean[col].median())
+
+    # Categorical fill
+    cat_cols = ['Ownership Type', 'Entity Type', 'Manufacturing Status']
+    for col in cat_cols:
+        if col in df_clean.columns:
+            df_clean[col] = df_clean[col].fillna('Unknown')
+
+    # Outlier capping
+    for col in ['Revenue (USD)', 'Employees Total']:
+        if col in df_clean.columns:
+            upper_limit = df_clean[col].quantile(0.99)
+            df_clean[col] = df_clean[col].clip(upper=upper_limit)
+
+    # Convert object columns to string to avoid Arrow serialization issues
+    for col in df_clean.select_dtypes(include=['object']).columns:
+        df_clean[col] = df_clean[col].astype(str)
+
+    return df_clean
+
 #Type this in terminal to run: python -m streamlit run data_prep.py  
 # UI Setup
 st.set_page_config(page_title="AI Company Intelligence", layout="wide")

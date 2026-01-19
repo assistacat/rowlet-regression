@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from data_prep import clean_data
 
 # set page configuration for wide layout and title
 st.set_page_config(page_title="Company Intelligence Prototype", layout="wide")
@@ -31,20 +32,32 @@ st.write("This is a prototype app skeleton. Data loading will be added next.")
 uploaded_file = st.sidebar.file_uploader("Choose a file", type=["csv", "xlsx"])
 
 if uploaded_file is not None:
-    with st.sidebar.spinner('Loading data...'):
-        # Read file based on extension
-        if uploaded_file.name.endswith('.csv'):
-            df_raw = pd.read_csv(uploaded_file)
-        else:
-            df_raw = pd.read_excel(uploaded_file)
-        # cache raw data for the time being (to be replaced with cleaned data later)
-        st.session_state.df_raw = df_raw
-    st.sidebar.success('Data loaded successfully!')
-    st.success(f"Data Loaded! Shape: {st.session_state.df_raw.shape}")
+    # Read file based on extension
+    if uploaded_file.name.endswith('.csv'):
+        df_raw = pd.read_csv(uploaded_file)
+    else:
+        df_raw = pd.read_excel(uploaded_file)
+
+    # clean data using imported function
+    df_clean = clean_data(df_raw)
+    
+    st.session_state['df_clean'] = df_clean
+
+    st.sidebar.success('Data cleaned and loaded successfully!')
+    st.success(f"Data cleaned & ready! Active companies: {len(df_clean)} | Shape: {df_clean.shape}")
 
     # Show a preview of the first few rows
-    st.subheader("Data Preview (First 5 rows)")
-    st.dataframe(st.session_state.df_raw.head(5))
+    st.subheader("Data Preview (First 10 rows)")
+    st.dataframe(df_clean.head(10))
+
+    # Optional: Reuse Person 1's download button
+    csv_data = df_clean.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Download Cleaned Dataset",
+        data=csv_data,
+        file_name="champions_group_cleaned.csv",
+        mime="text/csv"
+    )
 
     #sidebar filters (currently placeholders)
     st.sidebar.header("Filters")

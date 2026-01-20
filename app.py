@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from data_prep import clean_data
-from insights import build_cluster_profile, ensure_derived_metrics
+from insights import build_cluster_profile, ensure_derived_metrics, make_radar_fig
+from model import cluster_and_plot
 
 # set page configuration for wide layout and title
 st.set_page_config(page_title="Company Intelligence Prototype", layout="wide")
@@ -90,11 +90,17 @@ if uploaded_file is not None:
             if 'naics_multiselect' not in st.session_state:
                 st.session_state.naics_multiselect = ["All"]
             
+            # Ensure default values are in the available options
+            available_options = ["All"] + filtered_naics
+            valid_defaults = [x for x in st.session_state.naics_multiselect if x in available_options]
+            if not valid_defaults:
+                valid_defaults = ["All"]
+            
             # Multiselect with filtered options + "All" option
             selected_naics = st.sidebar.multiselect(
                 "Select NAICS Description(s)",
-                options=["All"] + filtered_naics,
-                default=st.session_state.naics_multiselect,
+                options=available_options,
+                default=valid_defaults,
                 key="naics_multiselect",
                 on_change=handle_naics_change
             )
@@ -175,6 +181,12 @@ if uploaded_file is not None:
             (df_filtered['Employees Total'] <= emp_range[1])
         ]
 
+        # Preserve Cluster column if it exists in session state
+        if 'df_filtered' in st.session_state and 'Cluster' in st.session_state['df_filtered'].columns:
+            # Merge the Cluster column back into the filtered data
+            cluster_data = st.session_state['df_filtered'][['DUNS Number', 'Cluster']].copy()
+            df_filtered = df_filtered.merge(cluster_data, on='DUNS Number', how='left')
+        
         st.session_state['df_filtered'] = df_filtered
         st.sidebar.metric("Filtered Companies", len(df_filtered))
 
@@ -192,48 +204,53 @@ if uploaded_file is not None:
             with col_left:
                 st.subheader("Cluster Overview")
                 
-                # Ensure derived metrics (from Person 4)
-                df_vis = ensure_derived_metrics(df_vis)
-                
-                # Update session state with derived metrics
-                st.session_state['df_filtered'] = df_vis
+                # Ensure derived metrics (preserve existing columns like Cluster)
+                if 'Cluster' not in df_vis.columns:
+                    df_vis = ensure_derived_metrics(df_vis)
+                    st.session_state['df_filtered'] = df_vis
 
                 # Clustering button
-                if 'Cluster' not in df_vis.columns:
-                    col_button, col_param = st.columns([1, 1])
-                    with col_param:
-                        n_clusters = st.number_input("Number of Clusters", min_value=2, max_value=10, value=4, step=1)
-                    with col_button:
-                        st.write("")  # spacing
-                        if st.button("Apply K-Means Clustering", type="primary"):
-                            try:
-                                # Select numeric features for clustering
-                                feature_cols = ['Revenue (USD)', 'Employees Total', 'IT Spend per Employee', 
-                                              'Revenue per Employee', 'Tech Intensity Score', 'Company Age']
-                                available_features = [col for col in feature_cols if col in df_vis.columns]
+                col_button, col_param = st.columns([1, 1])
+                with col_param:
+                    n_clusters = st.number_input("Number of Clusters", min_value=2, max_value=10, value=4, step=1)
+                with col_button:
+                    st.write("")  # spacing
+                    button_text = "Re-apply K-Means Clustering" if 'Cluster' in df_vis.columns else "Apply K-Means Clustering"
+                    if st.button(button_text, type="primary"):
+                        try:
+                            # Select numeric features for clustering
+                            feature_cols = ['Revenue (USD)', 'Employees Total', 'IT Spend per Employee', 
+                                          'Revenue per Employee', 'Tech Intensity Score', 'Company Age']
+                            available_features = [col for col in feature_cols if col in df_vis.columns]
+                            
+                            if len(available_features) >= 2:
+                                # Prepare data
+                                X = df_vis[available_features].fillna(0)
                                 
-                                if len(available_features) >= 2:
-                                    # Prepare data
-                                    X = df_vis[available_features].fillna(0)
-                                    
-                                    # Standardize features
-                                    scaler = StandardScaler()
-                                    X_scaled = scaler.fit_transform(X)
-                                    
-                                    # Apply K-Means
-                                    kmeans = KMeans(n_clusters=int(n_clusters), random_state=42, n_init=10)
-                                    clusters = kmeans.fit_predict(X_scaled)
-                                    
-                                    # Update both df_vis and session state
-                                    df_vis['Cluster'] = clusters
-                                    st.session_state['df_filtered'] = df_vis.copy()
-                                    st.success(f"✅ Created {n_clusters} clusters with {len(available_features)} features!")
-                                else:
-                                    st.error(f"Not enough features. Found: {available_features}")
-                            except Exception as e:
-                                st.error(f"Clustering failed: {str(e)}")
-                                import traceback
-                                st.code(traceback.format_exc())
+                                # Standardize features
+                                scaler = StandardScaler()
+                                X_scaled = scaler.fit_transform(X)
+                                
+                                # Use model.py clustering function
+                                artifacts, fig = cluster_and_plot(
+                                    df_vis,
+                                    X_scaled,
+                                    feature_cols=available_features,
+                                    n_clusters=int(n_clusters),
+                                    random_state=42
+                                )
+                                
+                                # Update session state with clustered dataframe
+                                st.session_state['df_filtered'] = artifacts.df_clustered.copy()
+                                st.session_state['pca_fig'] = fig  # Store for later visualization
+                                st.success(f"✅ Created {n_clusters} clusters with {len(available_features)} features!")
+                                st.rerun()
+                            else:
+                                st.error(f"Not enough features. Found: {available_features}")
+                        except Exception as e:
+                            st.error(f"Clustering failed: {str(e)}")
+                            import traceback
+                            st.code(traceback.format_exc())
 
                 if 'Cluster' in df_vis.columns:
                     profile_df = build_cluster_profile(
@@ -281,6 +298,10 @@ if uploaded_file is not None:
                     )
 
                     st.caption("📊 Cluster profiles showing size, average metrics, and top characteristics")
+                    
+                    # Display PCA scatter plot if available
+                    if 'pca_fig' in st.session_state:
+                        st.plotly_chart(st.session_state['pca_fig'], width='stretch')
                 else:
                     st.info("Clustering not yet applied — summary table will appear here once clustering is applied.")
 
@@ -348,8 +369,39 @@ if uploaded_file is not None:
 
                         # Radar chart placeholder
                         if 'Cluster' in df_vis.columns:
-                            st.info("Radar chart loading... (clustering complete)")
-                            # TODO: In next step we'll add real make_radar_fig() call here
+                            try:
+                                fig = make_radar_fig(
+                                    df_vis,
+                                    company_id=selected_duns,
+                                    id_col="DUNS Number",
+                                    cluster_col="Cluster",
+                                    metrics=[
+                                        "Revenue (USD)",
+                                        "Employees Total",
+                                        "Company Age",
+                                        "Revenue per Employee",
+                                        "IT Spend per Employee",
+                                        "Tech Intensity Score"
+                                    ],
+                                    company_name_col=display_col if display_col != 'DUNS Number' else None
+                                )
+                                # Update figure layout for better sizing and centering
+                                fig.update_layout(
+                                    height=500,  # Reduced from 600 to 500 to fit the container better
+                                    margin=dict(l=80, r=80, t=40, b=80),  # Increased margins to prevent text cutoff
+                                    autosize=True,
+                                    # Keep legend at the bottom to save horizontal space
+                                    legend=dict(
+                                        orientation="h",
+                                        yanchor="top",
+                                        y=-0.15,  # Pushed slightly lower to avoid overlapping the chart
+                                        xanchor="center",
+                                        x=0.5
+                                    )
+                                )
+                                st.plotly_chart(fig, width='stretch')
+                            except Exception as e:
+                                st.error(f"Failed to create radar chart: {str(e)}")
                         else:
                             st.info("Clustering not yet applied — radar chart will appear here once clusters exist.")
                 else:

@@ -7,6 +7,9 @@ def clean_data(df):
     """
     Person 1's full cleaning pipeline - returns cleaned df
     """
+    # Strip whitespace from column names
+    df.columns = df.columns.str.strip()
+    
     # Filter Active
     df_clean = df[df['Company Status (Active/Inactive)'] == 'Active'].copy()
 

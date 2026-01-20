@@ -175,18 +175,89 @@ if uploaded_file is not None:
         st.sidebar.metric("Filtered Companies", len(df_filtered))
 
     # main layout
-    if 'df_filtered' in st.session_state and len(st.session_state['df_filtered']) > 0:
+    if 'df_filtered' in st.session_state:
         df_vis = st.session_state['df_filtered']
+        
+        if len(df_vis) == 0:
+            # Show message when no companies match the filters
+            st.warning("⚠️ No companies match the current filter criteria. Please adjust your filters.")
+        else:
+            # Two columns: left wider for overview, right for detail
+            col_left, col_right = st.columns([3, 2])
 
-        # Two columns: left wider for overview, right for detail
-        col_left, col_right = st.columns([3, 2])
+            with col_left:
+                st.subheader("Cluster Overview")
+                st.info("Cluster scatter plot and summary table will appear here once clustering is applied.")
 
-        with col_left:
-            st.subheader("Cluster Overview")
-            st.info("Cluster scatter plot and summary table will appear here once clustering is applied.")
+            with col_right:
+                st.subheader("Company Detail")
+                
+                # Company selector – use DUNS Number as unique ID
+                if 'DUNS Number' in df_vis.columns:
+                    # Find a readable name column - try multiple variations
+                    possible_name_cols = ['Company Name', 'Company', 'Name', 'Company Sites']
+                    display_col = None
+                    for col in possible_name_cols:
+                        if col in df_vis.columns:
+                            display_col = col
+                            break
+                    
+                    # If no name column found, use DUNS Number
+                    if display_col is None:
+                        display_col = 'DUNS Number'
+                    
+                    # Create clean list of options (avoid duplicates) and sort by DUNS Number
+                    if display_col == 'DUNS Number':
+                        company_list = df_vis[['DUNS Number']].drop_duplicates().sort_values('DUNS Number').reset_index(drop=True)
+                    else:
+                        company_list = df_vis[[display_col, 'DUNS Number']].drop_duplicates().sort_values('DUNS Number').reset_index(drop=True)
+                    
+                    # Create combined display: "DUNS: 123456 - Company Name" (DUNS first for sorting)
+                    if display_col != 'DUNS Number':
+                        # Limit company name length to prevent cutoff, put DUNS first
+                        company_list['short_name'] = company_list[display_col].astype(str).str[:50]
+                        company_list['display'] = company_list['DUNS Number'].astype(str) + ' | ' + company_list['short_name']
+                    else:
+                        company_list['display'] = company_list['DUNS Number'].astype(str)
+                    
+                    company_options = company_list['display'].values.tolist()
 
-        with col_right:
-            st.subheader("Company Detail")
-            st.info("Select a company to view radar chart, comparison, and AI insights.")
+                    # Use markdown to add custom CSS for wider selectbox
+                    st.markdown("""
+                        <style>
+                        div[data-baseweb="select"] > div {
+                            min-width: 100% !important;
+                        }
+                        </style>
+                    """, unsafe_allow_html=True)
+
+                    # Dropdown
+                    selected_display = st.selectbox(
+                        "Select Company",
+                        options=company_options,
+                        index=0 if company_options else None,
+                        key="company_select"
+                    )
+
+                    if selected_display:
+                        # Get corresponding DUNS from the display string
+                        selected_idx = company_list[company_list['display'] == selected_display].index[0]
+                        selected_duns = company_list.loc[selected_idx, 'DUNS Number']
+                        
+                        if display_col != 'DUNS Number':
+                            selected_name = company_list.loc[selected_idx, display_col]
+                            st.write(f"{selected_name} (DUNS: {selected_duns})")
+                        else:
+                            st.write(f"DUNS: {selected_duns}")
+                            st.caption("Note: No company name column found in dataset")
+
+                        # Radar chart placeholder
+                        if 'Cluster' in df_vis.columns:
+                            st.info("Radar chart loading... (clustering complete)")
+                            # TODO: In next step we'll add real make_radar_fig() call here
+                        else:
+                            st.info("Clustering not yet applied — radar chart will appear here once clusters exist.")
+                else:
+                    st.warning("No 'DUNS Number' column found — cannot select companies.")
 else:
     st.sidebar.info("Upload data to enable filters.")

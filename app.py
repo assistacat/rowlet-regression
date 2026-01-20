@@ -1,6 +1,10 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
 from data_prep import clean_data
+from insights import build_cluster_profile, ensure_derived_metrics
 
 # set page configuration for wide layout and title
 st.set_page_config(page_title="Company Intelligence Prototype", layout="wide")
@@ -187,7 +191,98 @@ if uploaded_file is not None:
 
             with col_left:
                 st.subheader("Cluster Overview")
-                st.info("Cluster scatter plot and summary table will appear here once clustering is applied.")
+                
+                # Ensure derived metrics (from Person 4)
+                df_vis = ensure_derived_metrics(df_vis)
+                
+                # Update session state with derived metrics
+                st.session_state['df_filtered'] = df_vis
+
+                # Clustering button
+                if 'Cluster' not in df_vis.columns:
+                    col_button, col_param = st.columns([1, 1])
+                    with col_param:
+                        n_clusters = st.number_input("Number of Clusters", min_value=2, max_value=10, value=4, step=1)
+                    with col_button:
+                        st.write("")  # spacing
+                        if st.button("Apply K-Means Clustering", type="primary"):
+                            try:
+                                # Select numeric features for clustering
+                                feature_cols = ['Revenue (USD)', 'Employees Total', 'IT Spend per Employee', 
+                                              'Revenue per Employee', 'Tech Intensity Score', 'Company Age']
+                                available_features = [col for col in feature_cols if col in df_vis.columns]
+                                
+                                if len(available_features) >= 2:
+                                    # Prepare data
+                                    X = df_vis[available_features].fillna(0)
+                                    
+                                    # Standardize features
+                                    scaler = StandardScaler()
+                                    X_scaled = scaler.fit_transform(X)
+                                    
+                                    # Apply K-Means
+                                    kmeans = KMeans(n_clusters=int(n_clusters), random_state=42, n_init=10)
+                                    clusters = kmeans.fit_predict(X_scaled)
+                                    
+                                    # Update both df_vis and session state
+                                    df_vis['Cluster'] = clusters
+                                    st.session_state['df_filtered'] = df_vis.copy()
+                                    st.success(f"✅ Created {n_clusters} clusters with {len(available_features)} features!")
+                                else:
+                                    st.error(f"Not enough features. Found: {available_features}")
+                            except Exception as e:
+                                st.error(f"Clustering failed: {str(e)}")
+                                import traceback
+                                st.code(traceback.format_exc())
+
+                if 'Cluster' in df_vis.columns:
+                    profile_df = build_cluster_profile(
+                        df_vis,
+                        cluster_col="Cluster",
+                        metrics=[
+                            "Revenue (USD)",
+                            "Employees Total",
+                            "Company Age",
+                            "Revenue per Employee",
+                            "IT Spend per Employee",
+                            "Tech Intensity Score"
+                        ],
+                        extra_group_cols=["Country", "NAICS Description"]
+                    )
+
+                    # Select key columns for display (avoid overwhelming the table)
+                    display_cols = [
+                        "Cluster", 
+                        "Cluster Size",
+                        "Revenue (USD)_mean",
+                        "Employees Total_mean",
+                        "Company Age_mean",
+                        "Top Country",
+                        "Top NAICS Description"
+                    ]
+                    
+                    # Only show columns that exist
+                    available_cols = [col for col in display_cols if col in profile_df.columns]
+                    
+                    # Rename columns for better readability
+                    display_df = profile_df[available_cols].copy()
+                    display_df.columns = [
+                        col.replace("_mean", "").replace("Top ", "").replace(" (USD)", "($)")
+                        for col in display_df.columns
+                    ]
+                    
+                    st.dataframe(
+                        display_df.style.format({
+                            col: "{:,.0f}" for col in display_df.columns 
+                            if display_df[col].dtype in ['float64', 'int64'] and col != 'Cluster'
+                        }),
+                        width='stretch',
+                        height=300
+                    )
+
+                    st.caption("📊 Cluster profiles showing size, average metrics, and top characteristics")
+                else:
+                    st.info("Clustering not yet applied — summary table will appear here once clustering is applied.")
 
             with col_right:
                 st.subheader("Company Detail")

@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from data_prep import clean_data
 from insights import build_cluster_profile, ensure_derived_metrics, make_radar_fig
-from model import cluster_and_plot
+from model_day1 import cluster_and_plot
 
 # set page configuration for wide layout and title
 st.set_page_config(page_title="Company Intelligence Prototype", layout="wide")

@@ -58,28 +58,9 @@ if __name__ == "__main__":
         else:
             df = pd.read_excel(uploaded_file)
         
-        # Filter Active Companies Only
-        # Based on the Data Dictionary column: "Company Status (Active/Inactive)"
-        df_clean = df[df['Company Status (Active/Inactive)'] == 'Active'].copy()
-
-    # Missing Value Treatment (Imputation)
-        # Filling 'Golden Columns' with the median 
-        golden_cols = ['Revenue (USD)', 'Employees Total', 'IT Budget', 'Year Found']
-        for col in golden_cols:
-            if col in df_clean.columns:
-                df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
-                df_clean[col] = df_clean[col].fillna(df_clean[col].median())
-
-        # Handle Categoricals with 'Unknown' 
-        cat_cols = ['Ownership Type', 'Entity Type', 'Manufacturing Status']
-        for col in cat_cols:
-            if col in df_clean.columns:
-                df_clean[col] = df_clean[col].fillna('Unknown')
-
-        # Step 4: Outlier Capping (99th Percentile) 
-        for col in ['Revenue (USD)', 'Employees Total']:
-            upper_limit = df_clean[col].quantile(0.99)
-            df_clean[col] = df_clean[col].clip(upper=upper_limit)
+        # Use the clean_data function to process the data
+        df_clean = clean_data(df)
+    
     #  Step 5: Initial Quality Report
         st.success("Data Loaded and Cleaned Successfully!")
         st.divider()

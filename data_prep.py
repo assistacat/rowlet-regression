@@ -40,6 +40,10 @@ def clean_data(df):
     for col in df_clean.select_dtypes(include=['object']).columns:
         df_clean[col] = df_clean[col].astype(str)
 
+    # Handle many edge-cases gracefully: Add "N/A" for missing
+    # This prevents the LLM from choking on 'None' or 'NaN' values
+    df_clean = df_clean.fillna("N/A")
+
     return df_clean
 
 #Type this in terminal to run: python -m streamlit run data_prep.py  

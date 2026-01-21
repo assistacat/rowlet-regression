@@ -228,10 +228,6 @@ def plot_pca(
     )
     return fig
 
-# ----------------------------
-# Full Day 2 pipeline entry point
-# ----------------------------
-
 def run_day2_clustering(
     df_features: pd.DataFrame,
     *,
@@ -284,4 +280,45 @@ def run_day2_clustering(
     )
     return artifacts, fig
 
-# note cache clustering result requirement not yet satisfied
+# ----------------------------
+# Full Day 2 pipeline entry point
+# ----------------------------
+
+# call this function, for example: art, fig = get_day2_clustering_cached(df_features, chosen_k)
+def get_day2_clustering_cached(
+    df_features: pd.DataFrame,
+    *,
+    top_n_naics2: int = 6,
+    k_min: int = 2,
+    k_max: int = 8,
+    chosen_k: int = 5,
+    random_state: int = 42,
+    cache_ns: str = "day2_cluster",
+) -> Tuple[ClusterArtifacts, "px.Figure"]:
+    """
+    Streamlit-aware caching wrapper.
+    Stores artifacts + fig in st.session_state to avoid recompute on every rerun.
+
+    NOTE: This function requires Streamlit at runtime.
+    """
+    import streamlit as st  
+
+    # Optional: include a lightweight signature so cache invalidates if the data shape changes
+    data_sig = (len(df_features), tuple(df_features.columns))
+
+    cache_key = (cache_ns, data_sig, top_n_naics2, k_min, k_max, chosen_k, random_state)
+
+    if st.session_state.get("cluster_cache_key") != cache_key:
+        art, fig = run_day2_clustering(
+            df_features,
+            top_n_naics2=top_n_naics2,
+            k_min=k_min,
+            k_max=k_max,
+            chosen_k=chosen_k,
+            random_state=random_state,
+        )
+        st.session_state["cluster_cache_key"] = cache_key
+        st.session_state["cluster_artifacts"] = art
+        st.session_state["cluster_fig"] = fig
+
+    return st.session_state["cluster_artifacts"], st.session_state["cluster_fig"]

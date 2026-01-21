@@ -1,185 +1,200 @@
 # insights.py
+# Person 4 (Insights) — Day 2 aligned with app.py
+#
+# Required by app.py:
+#   - ensure_derived_metrics(df)
+#   - build_cluster_profile(df, cluster_col="Cluster", metrics=[...], extra_group_cols=[...])
+#   - make_radar_fig(df, company_id, id_col="DUNS Number", cluster_col="Cluster",
+#                    metrics=[...], company_name_col="Company Sites")
+#
+# Optional helpers:
+#   - compute_anomaly_score(...)
+#   - quick_business_take(...)
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Iterable, List, Optional, Tuple, Dict, Any
+from datetime import datetime
+from typing import List, Optional, Dict, Any
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
 
-# Configs
-CURRENT_YEAR = 2026
+# ----------------------------
+# Defaults
+# ----------------------------
 
-DEFAULT_METRICS = [
+DEFAULT_METRICS: List[str] = [
     "Revenue (USD)",
     "Employees Total",
-    "Company Age",
-    "Revenue per Employee",
     "IT Spend per Employee",
+    "Revenue per Employee",
     "Tech Intensity Score",
+    "Company Age",
 ]
 
-# Preferred IT spend columns in this dataset
-IT_SPEND_CANDIDATES = ["IT Budget", "IT spend"]
 
-# Signals for "tech intensity"
+# ----------------------------
+# Utilities
+# ----------------------------
+
+def _to_numeric(s: pd.Series) -> pd.Series:
+    """Convert to numeric safely."""
+    return pd.to_numeric(s, errors="coerce")
+
+
+def _mode_or_nan(series: pd.Series) -> Any:
+    """Return the mode (most frequent non-null value) or np.nan."""
+    s = series.dropna()
+    if s.empty:
+        return np.nan
+    return s.mode().iloc[0]
+
+
+# ----------------------------
+# Derived metrics
+# ----------------------------
+
 TECH_SIGNAL_COLS = [
-    "IT Budget",
-    "IT spend",
-    "No. of PC",
-    "No. of Desktops",
-    "No. of Laptops",
-    "No. of Routers",
-    "No. of Servers",
-    "No. of Storage Devices",
+    "IT Budget", "IT spend",
+    "No. of PC", "No. of Desktops", "No. of Laptops",
+    "No. of Routers", "No. of Servers", "No. of Storage Devices",
 ]
 
 
-def _safe_numeric(series: pd.Series) -> pd.Series:
-    """Convert to numeric safely; non-parsable -> NaN."""
-    return pd.to_numeric(series, errors="coerce")
-
-
-def _col_exists(df: pd.DataFrame, col: str) -> bool:
-    return col in df.columns
-
-
-def _first_existing_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
-
-
-def _minmax_norm(s: pd.Series) -> pd.Series:
-    """Min-max normalize (0..1) robustly; constant -> 0.5; all NaN -> NaN."""
-    s = _safe_numeric(s)
-    if s.dropna().empty:
-        return s
-    mn = float(s.min(skipna=True))
-    mx = float(s.max(skipna=True))
-    if np.isclose(mx - mn, 0.0):
-        return pd.Series(np.where(s.notna(), 0.5, np.nan), index=s.index)
-    return (s - mn) / (mx - mn)
-
-
-def ensure_derived_metrics(
-    df: pd.DataFrame,
-    *,
-    current_year: int = CURRENT_YEAR,
-    employees_col: str = "Employees Total",
-    revenue_col: str = "Revenue (USD)",
-    year_found_col: str = "Year Found",
-) -> pd.DataFrame:
+def ensure_derived_metrics(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Ensure the dataframe has derived columns used for insights:
-    - Company Age
-    - Revenue per Employee
-    - IT Spend per Employee
-    - Tech Intensity Score
+    Ensures these derived metrics exist (using known dataset column names):
+      - Company Age (median-imputed)
+      - Revenue per Employee
+      - IT Spend per Employee
+      - Tech Intensity Score (0–1) from binary tech signals
 
-    Returns a COPY of df with added/updated derived columns.
+    Assumes canonical columns:
+      Revenue (USD), Employees Total, IT spend, Year Found
     """
     out = df.copy()
 
-    # Company Age
-    if _col_exists(out, year_found_col):
-        yf = _safe_numeric(out[year_found_col])
-        out["Company Age"] = (current_year - yf).clip(lower=0)
-    else:
-        if "Company Age" not in out.columns:
+    # --- Company Age (median imputation) ---
+    if "Company Age" not in out.columns:
+        if "Year Found" in out.columns:
+            year = pd.to_numeric(out["Year Found"], errors="coerce")
+            age = datetime.now().year - year
+            age = age.where(age >= 0, np.nan)
+            out["Company Age"] = age.fillna(age.median(skipna=True))
+        else:
             out["Company Age"] = np.nan
 
-    # Revenue per Employee
-    if _col_exists(out, revenue_col) and _col_exists(out, employees_col):
-        rev = _safe_numeric(out[revenue_col])
-        emp = _safe_numeric(out[employees_col])
-        out["Revenue per Employee"] = rev / (emp.fillna(0) + 1)
-    else:
-        if "Revenue per Employee" not in out.columns:
+    # --- Revenue per Employee ---
+    if "Revenue per Employee" not in out.columns:
+        if "Revenue (USD)" in out.columns and "Employees Total" in out.columns:
+            rev = pd.to_numeric(out["Revenue (USD)"], errors="coerce").fillna(0)
+            emp = pd.to_numeric(out["Employees Total"], errors="coerce").fillna(0)
+            out["Revenue per Employee"] = rev / (emp + 1.0)
+        else:
             out["Revenue per Employee"] = np.nan
 
-    # IT Spend per Employee
-    it_col = _first_existing_col(out, IT_SPEND_CANDIDATES)
-    if it_col is not None and _col_exists(out, employees_col):
-        it = _safe_numeric(out[it_col]).fillna(0)
-        emp = _safe_numeric(out[employees_col]).fillna(0)
-        out["IT Spend per Employee"] = it / (emp + 1)
-    else:
-        if "IT Spend per Employee" not in out.columns:
+    # --- IT Spend per Employee ---
+    if "IT Spend per Employee" not in out.columns:
+        if "IT spend" in out.columns and "Employees Total" in out.columns:
+            it = pd.to_numeric(out["IT spend"], errors="coerce").fillna(0)
+            emp = pd.to_numeric(out["Employees Total"], errors="coerce").fillna(0)
+            out["IT Spend per Employee"] = it / (emp + 1.0)
+        else:
             out["IT Spend per Employee"] = np.nan
 
-    # Tech Intensity Score: average of available binary signals, normalized to 0..1
-    available_signals = [c for c in TECH_SIGNAL_COLS if c in out.columns]
-    if available_signals:
-        binary_signals = []
-        for c in available_signals:
-            col = _safe_numeric(out[c]).fillna(0)
-            binary_signals.append((col > 0).astype(int))
-        # Average of binary flags -> 0..1
-        out["Tech Intensity Score"] = pd.concat(binary_signals, axis=1).mean(axis=1)
-    else:
-        if "Tech Intensity Score" not in out.columns:
+    # --- Tech Intensity Score (0–1) ---
+    if "Tech Intensity Score" not in out.columns:
+        cols = [c for c in TECH_SIGNAL_COLS if c in out.columns]
+        if not cols:
             out["Tech Intensity Score"] = np.nan
+        else:
+            bin_signals = []
+            for c in cols:
+                s = out[c]
+                if pd.api.types.is_bool_dtype(s):
+                    b = s.fillna(False).astype(int)
+                else:
+                    b = pd.to_numeric(s, errors="coerce").fillna(0)
+                    b = (b > 0).astype(int)
+                bin_signals.append(b)
+
+            out["Tech Intensity Score"] = pd.concat(bin_signals, axis=1).mean(axis=1)
 
     return out
 
 
+# ----------------------------
+# Required by app.py
+# ----------------------------
+
 def build_cluster_profile(
     df: pd.DataFrame,
-    *,
     cluster_col: str = "Cluster",
     metrics: Optional[List[str]] = None,
     extra_group_cols: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     """
-    Create a cluster profile summary table:
-    - Count
-    - Mean + Median of selected metrics
-    Optionally adds a simple mode/top value for extra_group_cols (e.g., Country, NAICS Description).
+    Build a cluster profile table for UI + report.
+
+    Output columns:
+      - cluster_col (e.g., "Cluster")
+      - Cluster Size
+      - <metric>_mean for each metric
+      - <metric>_median for each metric (extra but useful)
+      - Top <extra_group_col> for each extra group column
     """
     if metrics is None:
         metrics = DEFAULT_METRICS
+    if extra_group_cols is None:
+        extra_group_cols = []
 
     if cluster_col not in df.columns:
-        return pd.DataFrame({"error": [f"Missing required column: {cluster_col}"]})
+        raise ValueError(f"'{cluster_col}' not found in dataframe. Did you apply clustering?")
 
-    # Ensure derived metrics exist
-    df2 = ensure_derived_metrics(df)
+    work = df.copy()
 
-    use_metrics = [m for m in metrics if m in df2.columns]
-    if not use_metrics:
-        return pd.DataFrame({"error": ["No requested metrics exist in the dataframe."]})
+    # Ensure metrics exist; if missing, create them as NaN so aggregation doesn't crash
+    for m in metrics:
+        if m not in work.columns:
+            work[m] = np.nan
 
-    # Build aggregation
-    agg: Dict[str, Any] = {}
-    for m in use_metrics:
-        agg[m] = ["mean", "median"]
+    grouped = work.groupby(cluster_col, dropna=False)
 
-    prof = df2.groupby(cluster_col).agg(agg)
-    # Flatten multiindex columns
-    prof.columns = [f"{col}_{stat}" for col, stat in prof.columns]
-    prof.insert(0, "Cluster Size", df2.groupby(cluster_col).size())
+    # Aggregate mean/median
+    agg_dict: Dict[str, List[str]] = {m: ["mean", "median"] for m in metrics}
+    prof = grouped.agg(agg_dict)
+    prof.columns = [f"{col}_{stat}" for col, stat in prof.columns]  # flatten MultiIndex
+    prof = prof.reset_index()
 
-    # Optional: add top categories for context (mode)
-    if extra_group_cols:
-        for col in extra_group_cols:
-            if col in df2.columns:
-                top = (
-                    df2.groupby(cluster_col)[col]
-                    .agg(lambda s: s.dropna().mode().iloc[0] if not s.dropna().mode().empty else np.nan)
-                )
-                prof[f"Top {col}"] = top
+    # Cluster size
+    sizes = grouped.size().reset_index(name="Cluster Size")
+    prof = prof.merge(sizes, on=cluster_col, how="left")
 
-    prof = prof.reset_index().sort_values("Cluster Size", ascending=False)
+    # Extra group columns (top mode)
+    for c in extra_group_cols:
+        if c not in work.columns:
+            prof[f"Top {c}"] = np.nan
+            continue
+        top_vals = grouped[c].apply(_mode_or_nan).reset_index(name=f"Top {c}")
+        prof = prof.merge(top_vals, on=cluster_col, how="left")
+
+    # Provide an alias if cluster_col isn't "Cluster"
+    if cluster_col != "Cluster" and "Cluster" not in prof.columns:
+        prof["Cluster"] = prof[cluster_col]
+
+    # Sort clusters for consistent display
+    try:
+        prof = prof.sort_values(by=cluster_col).reset_index(drop=True)
+    except Exception:
+        pass
+
     return prof
 
 
 def make_radar_fig(
     df: pd.DataFrame,
-    *,
     company_id: Any,
     id_col: str = "DUNS Number",
     cluster_col: str = "Cluster",
@@ -187,174 +202,216 @@ def make_radar_fig(
     company_name_col: Optional[str] = None,
 ) -> go.Figure:
     """
-    Plotly radar chart comparing a selected company vs its cluster average.
-    Normalizes each metric within the (filtered) dataframe to 0..1 so the radar is interpretable.
+    Create a Plotly radar chart comparing:
+      - the selected company
+      - its cluster average (mean)
+
+    Returns a Plotly figure.
     """
     if metrics is None:
         metrics = DEFAULT_METRICS
 
     if id_col not in df.columns:
-        return go.Figure().update_layout(title=f"Missing required column: {id_col}")
-
+        raise ValueError(f"'{id_col}' not found in dataframe.")
     if cluster_col not in df.columns:
-        return go.Figure().update_layout(title=f"Missing required column: {cluster_col}")
+        raise ValueError(f"'{cluster_col}' not found in dataframe. Did you apply clustering?")
 
-    df2 = ensure_derived_metrics(df)
-    use_metrics = [m for m in metrics if m in df2.columns]
+    work = ensure_derived_metrics(df.copy())
 
-    if not use_metrics:
-        return go.Figure().update_layout(title="No radar metrics available in dataframe.")
+    # Pull selected company row
+    row_df = work.loc[work[id_col] == company_id]
+    if row_df.empty:
+        raise ValueError(f"Company id '{company_id}' not found in column '{id_col}'.")
+    row = row_df.iloc[0]
 
-    sel = df2[df2[id_col] == company_id]
-    if sel.empty:
-        return go.Figure().update_layout(title=f"Company not found for {id_col}={company_id}")
+    cluster_val = row[cluster_col]
+    cluster_df = work.loc[work[cluster_col] == cluster_val]
 
-    sel_row = sel.iloc[0]
-    cluster_val = sel_row[cluster_col]
+    labels: List[str] = []
+    company_vals: List[float] = []
+    cluster_vals: List[float] = []
 
-    peer = df2[df2[cluster_col] == cluster_val]
-    if peer.empty:
-        return go.Figure().update_layout(title=f"No peers found for cluster={cluster_val}")
-
-    # Normalize metrics across df2 (or you can switch to peer-only normalization if you want)
-    norm_cols = {}
-    for m in use_metrics:
-        norm_cols[m] = _minmax_norm(df2[m])
-
-    # Pull normalized values for company and cluster mean
-    company_vals = []
-    cluster_vals = []
-    labels = []
-    for m in use_metrics:
+    for m in metrics:
+        if m not in work.columns:
+            continue
         labels.append(m)
-        company_vals.append(float(norm_cols[m].loc[sel_row.name]) if pd.notna(norm_cols[m].loc[sel_row.name]) else np.nan)
-        cluster_mean = peer[m].astype("float64", errors="ignore")
-        cluster_mean_val = float(np.nanmean(_safe_numeric(cluster_mean)))
-        # Convert cluster mean to normalized scale using overall min/max
-        # (by normalizing series and then taking mean of normalized values in cluster)
-        cluster_vals.append(float(np.nanmean(norm_cols[m].loc[peer.index])))
 
-    # Radar needs closed loop
-    labels_closed = labels + [labels[0]]
-    company_closed = company_vals + [company_vals[0]]
-    cluster_closed = cluster_vals + [cluster_vals[0]]
+        comp_v = _to_numeric(pd.Series([row[m]])).iloc[0]
+        clus_v = _to_numeric(cluster_df[m]).mean(skipna=True)
 
-    # Title label
-    if company_name_col and company_name_col in df2.columns:
-        name = str(sel_row.get(company_name_col, company_id))
-    else:
-        name = str(company_id)
+        company_vals.append(comp_v)
+        cluster_vals.append(clus_v)
+
+    if not labels:
+        raise ValueError("No valid metrics available for radar chart.")
+
+    # Normalize to 0–1 for display (per-metric, based on company vs cluster values)
+    comp_norm: List[float] = []
+    clus_norm: List[float] = []
+
+    for cv, gv in zip(company_vals, cluster_vals):
+        if pd.isna(cv) and pd.isna(gv):
+            comp_norm.append(0.5)
+            clus_norm.append(0.5)
+            continue
+
+        cv2 = 0.0 if pd.isna(cv) else float(cv)
+        gv2 = 0.0 if pd.isna(gv) else float(gv)
+
+        mn = min(cv2, gv2)
+        mx = max(cv2, gv2)
+
+        if mx - mn < 1e-9:
+            comp_norm.append(0.5)
+            clus_norm.append(0.5)
+        else:
+            comp_norm.append((cv2 - mn) / (mx - mn))
+            clus_norm.append((gv2 - mn) / (mx - mn))
+
+    # Close the loop for radar
+    labels_loop = labels + [labels[0]]
+    comp_loop = comp_norm + [comp_norm[0]]
+    clus_loop = clus_norm + [clus_norm[0]]
+
+    # Display name
+    company_name = str(company_id)
+    if company_name_col and company_name_col in work.columns:
+        n = row.get(company_name_col, None)
+        if pd.notna(n):
+            company_name = str(n)
 
     fig = go.Figure()
     fig.add_trace(
         go.Scatterpolar(
-            r=cluster_closed,
-            theta=labels_closed,
+            r=clus_loop,
+            theta=labels_loop,
             fill="toself",
-            name=f"Cluster {cluster_val} average",
+            name="Cluster avg",
+            opacity=0.55,
         )
     )
     fig.add_trace(
         go.Scatterpolar(
-            r=company_closed,
-            theta=labels_closed,
+            r=comp_loop,
+            theta=labels_loop,
             fill="toself",
-            name=f"Company {name}",
+            name=company_name,
+            opacity=0.75,
         )
     )
 
     fig.update_layout(
-        title=f"Company vs Cluster {cluster_val} (Normalized 0–1)",
         polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
         showlegend=True,
+        margin=dict(l=30, r=30, t=30, b=30),
     )
+
     return fig
 
 
+# ----------------------------
+# Optional helpers
+# ----------------------------
+
 def compute_anomaly_score(
     df: pd.DataFrame,
-    *,
     company_id: Any,
     id_col: str = "DUNS Number",
     cluster_col: str = "Cluster",
     metrics: Optional[List[str]] = None,
-    z_thresh: float = 2.0,
-) -> Tuple[float, List[str]]:
+) -> pd.DataFrame:
     """
-    Simple anomaly score within the company’s cluster using z-scores.
-    Returns (score, flags) where:
-    - score = sum of |z| beyond threshold (clipped), across metrics
-    - flags = list of human-readable anomaly strings
+    Returns a small table of within-cluster z-scores for a company across metrics.
+    Higher absolute z-score => more unusual within its cluster.
     """
     if metrics is None:
         metrics = DEFAULT_METRICS
 
-    if id_col not in df.columns or cluster_col not in df.columns:
-        return 0.0, ["Missing required id/cluster columns."]
+    work = ensure_derived_metrics(df.copy())
 
-    df2 = ensure_derived_metrics(df)
+    if id_col not in work.columns or cluster_col not in work.columns:
+        raise ValueError("Missing id_col or cluster_col.")
 
-    sel = df2[df2[id_col] == company_id]
-    if sel.empty:
-        return 0.0, [f"Company not found for {id_col}={company_id}"]
+    row_df = work.loc[work[id_col] == company_id]
+    if row_df.empty:
+        raise ValueError("Company not found.")
+    row = row_df.iloc[0]
 
-    sel_row = sel.iloc[0]
-    cluster_val = sel_row[cluster_col]
-    peer = df2[df2[cluster_col] == cluster_val]
+    cl = row[cluster_col]
+    cluster_df = work.loc[work[cluster_col] == cl]
 
-    use_metrics = [m for m in metrics if m in df2.columns]
-    if not use_metrics or peer.empty:
-        return 0.0, ["No metrics or peers available for anomaly scoring."]
-
-    score = 0.0
-    flags: List[str] = []
-
-    for m in use_metrics:
-        peer_vals = _safe_numeric(peer[m])
-        mu = float(peer_vals.mean(skipna=True)) if not peer_vals.dropna().empty else np.nan
-        sd = float(peer_vals.std(skipna=True)) if not peer_vals.dropna().empty else np.nan
-        x = _safe_numeric(pd.Series([sel_row.get(m)])).iloc[0]
-
-        if np.isnan(mu) or np.isnan(sd) or np.isclose(sd, 0.0) or np.isnan(x):
+    records = []
+    for m in metrics:
+        if m not in work.columns:
             continue
 
-        z = (x - mu) / sd
-        if abs(z) >= z_thresh:
-            direction = "above" if z > 0 else "below"
-            flags.append(f"{m}: {direction} cluster avg (z={z:.2f})")
-            score += min(abs(float(z)), 5.0)  # clip to avoid one metric dominating
+        vals = _to_numeric(cluster_df[m])
+        mu = vals.mean(skipna=True)
+        sd = vals.std(skipna=True)
 
-    return float(score), flags
+        x = _to_numeric(pd.Series([row[m]])).iloc[0]
+        if pd.isna(x) or pd.isna(mu) or pd.isna(sd) or sd < 1e-9:
+            z = np.nan
+        else:
+            z = (float(x) - float(mu)) / float(sd)
+
+        records.append({"Metric": m, "Value": x, "Cluster Mean": mu, "Z-Score": z})
+
+    return pd.DataFrame(records).sort_values(by="Z-Score", key=lambda s: s.abs(), ascending=False)
 
 
 def quick_business_take(
     df: pd.DataFrame,
-    *,
     company_id: Any,
     id_col: str = "DUNS Number",
     cluster_col: str = "Cluster",
-) -> str:
+    metrics: Optional[List[str]] = None,
+) -> List[str]:
     """
-    A lightweight, non-LLM insight blurb (useful as fallback or for debugging).
+    Simple, readable insight bullets (good for report/demo).
+    Uses deviation from cluster mean.
     """
-    df2 = ensure_derived_metrics(df)
-    sel = df2[df2[id_col] == company_id]
-    if sel.empty or cluster_col not in df2.columns:
-        return "No insight available (company or cluster not found)."
+    if metrics is None:
+        metrics = [
+            "Revenue per Employee",
+            "IT Spend per Employee",
+            "Tech Intensity Score",
+            "Company Age",
+        ]
 
-    row = sel.iloc[0]
-    cluster_val = row.get(cluster_col, "N/A")
+    work = ensure_derived_metrics(df.copy())
 
-    rev_pe = row.get("Revenue per Employee", np.nan)
-    it_pe = row.get("IT Spend per Employee", np.nan)
-    tech = row.get("Tech Intensity Score", np.nan)
+    row_df = work.loc[work[id_col] == company_id]
+    if row_df.empty:
+        return [f"Company {company_id} not found."]
+    row = row_df.iloc[0]
 
-    parts = [f"Cluster {cluster_val}."]
-    if pd.notna(rev_pe):
-        parts.append(f"Revenue/Employee ≈ {rev_pe:,.0f}.")
-    if pd.notna(it_pe):
-        parts.append(f"IT Spend/Employee ≈ {it_pe:,.0f}.")
-    if pd.notna(tech):
-        parts.append(f"Tech Intensity ≈ {tech:.2f} (0–1).")
+    if cluster_col not in work.columns:
+        return ["Clustering not applied yet."]
 
-    return " ".join(parts)
+    cl = row[cluster_col]
+    cluster_df = work.loc[work[cluster_col] == cl]
+
+    bullets = []
+    for m in metrics:
+        if m not in work.columns:
+            continue
+
+        x = _to_numeric(pd.Series([row[m]])).iloc[0]
+        mu = _to_numeric(cluster_df[m]).mean(skipna=True)
+
+        if pd.isna(x) or pd.isna(mu) or abs(mu) < 1e-9:
+            continue
+
+        ratio = float(x) / float(mu)
+        if ratio >= 1.25:
+            bullets.append(f"{m}: higher than cluster average (~{ratio:.1f}×).")
+        elif ratio <= 0.75:
+            bullets.append(f"{m}: lower than cluster average (~{ratio:.1f}×).")
+        else:
+            bullets.append(f"{m}: around cluster average.")
+
+    if not bullets:
+        bullets = ["Not enough data to generate a business take for this company."]
+
+    return bullets

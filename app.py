@@ -311,6 +311,66 @@ if uploaded_file is not None:
                 df_vis = ensure_derived_metrics(df_vis)
                 st.session_state['df_filtered'] = df_vis
 
+                # Elbow Method Section (Optional - for finding optimal k)
+                with st.expander("🔍 Advanced: Elbow Method (Find Optimal Clusters)", expanded=False):
+                    st.caption("Use the elbow method to find the optimal number of clusters. Look for the 'elbow' where inertia reduction slows.")
+                    if st.button("📊 Compute Elbow Chart", key="elbow_btn", type="secondary"):
+                        with st.spinner("Computing elbow curve..."):
+                            try:
+                                from model import compute_elbow_inertia
+                                
+                                # Prepare data same as clustering
+                                feature_cols = ['Revenue (USD)', 'Employees Total', 'IT Spend per Employee', 
+                                                'Revenue per Employee', 'Tech Intensity Score', 'Company Age']
+                                available_features = [col for col in feature_cols if col in df_vis.columns]
+                                
+                                if len(available_features) >= 2:
+                                    X = df_vis[available_features].fillna(0)
+                                    scaler = StandardScaler()
+                                    X_scaled = scaler.fit_transform(X)
+                                    
+                                    # Compute elbow (k from 2 to 10)
+                                    elbow_data = compute_elbow_inertia(X_scaled, k_min=2, k_max=10, random_state=42)
+                                    
+                                    # Plot elbow chart
+                                    import plotly.graph_objects as go
+                                    fig_elbow = go.Figure()
+                                    fig_elbow.add_trace(go.Scatter(
+                                        x=list(elbow_data.keys()),
+                                        y=list(elbow_data.values()),
+                                        mode='lines+markers',
+                                        name='Inertia',
+                                        line=dict(color='#4CAF50', width=3),
+                                        marker=dict(size=10)
+                                    ))
+                                    fig_elbow.update_layout(
+                                        title="Elbow Method: Finding Optimal Number of Clusters",
+                                        xaxis_title="Number of Clusters (k)",
+                                        yaxis_title="Inertia (Within-Cluster Sum of Squares)",
+                                        template="plotly_dark",
+                                        height=400
+                                    )
+                                    st.plotly_chart(fig_elbow, width='stretch')
+                                    
+                                    # Calculate elbow point heuristic (simple: max second derivative)
+                                    k_values = list(elbow_data.keys())
+                                    inertias = list(elbow_data.values())
+                                    if len(inertias) >= 3:
+                                        # Calculate rate of change
+                                        deltas = [inertias[i] - inertias[i+1] for i in range(len(inertias)-1)]
+                                        second_deltas = [deltas[i] - deltas[i+1] for i in range(len(deltas)-1)]
+                                        optimal_k_idx = second_deltas.index(max(second_deltas)) + 2  # +2 because we start from k=2
+                                        optimal_k = k_values[optimal_k_idx]
+                                        st.success(f"💡 Suggested optimal k: **{optimal_k}** (based on maximum curvature)")
+                                    else:
+                                        st.info("Use the chart above to visually identify the 'elbow' point")
+                                else:
+                                    st.error(f"Not enough features for elbow analysis. Found: {available_features}")
+                            except Exception as e:
+                                st.error(f"Elbow computation failed: {str(e)}")
+                                import traceback
+                                st.code(traceback.format_exc())
+                
                 # Clustering button
                 col_button, col_param = st.columns([1, 1])
                 with col_param:
@@ -319,40 +379,48 @@ if uploaded_file is not None:
                     st.write("")  # spacing
                     button_text = "Re-apply K-Means Clustering" if 'Cluster' in df_vis.columns else "Apply K-Means Clustering"
                     if st.button(button_text, type="primary"):
-                        try:
-                            # Select numeric features for clustering
-                            feature_cols = ['Revenue (USD)', 'Employees Total', 'IT Spend per Employee', 
-                                            'Revenue per Employee', 'Tech Intensity Score', 'Company Age']
-                            available_features = [col for col in feature_cols if col in df_vis.columns]
-                            
-                            if len(available_features) >= 2:
-                                # Prepare data
-                                X = df_vis[available_features].fillna(0)
-                                
-                                # Standardize features
-                                scaler = StandardScaler()
-                                X_scaled = scaler.fit_transform(X)
-                                
-                                # Use model.py clustering function
-                                artifacts, fig = cluster_and_plot(
-                                    df_vis,
-                                    X_scaled,
-                                    feature_cols=available_features,
-                                    n_clusters=int(n_clusters),
-                                    random_state=42
-                                )
-                                
-                                # Update session state with clustered dataframe
-                                st.session_state['df_filtered'] = artifacts.df_clustered.copy()
-                                st.session_state['pca_fig'] = fig  # Store for later visualization
-                                st.success(f"✅ Created {n_clusters} clusters with {len(available_features)} features!")
-                                st.rerun()
-                            else:
-                                st.error(f"Not enough features. Found: {available_features}")
-                        except Exception as e:
-                            st.error(f"Clustering failed: {str(e)}")
-                            import traceback
-                            st.code(traceback.format_exc())
+                        # Select numeric features for clustering
+                        feature_cols = ['Revenue (USD)', 'Employees Total', 'IT Spend per Employee', 
+                                        'Revenue per Employee', 'Tech Intensity Score', 'Company Age']
+                        available_features = [col for col in feature_cols if col in df_vis.columns]
+                        
+                        # Create cache key to prevent redundant clustering
+                        cache_key = (len(df_vis), tuple(sorted(available_features)), int(n_clusters), tuple(sorted(df_vis['DUNS Number'].unique())))
+                        
+                        # Check if we need to re-cluster
+                        if st.session_state.get('cluster_cache_key') == cache_key:
+                            st.info("✅ Using existing clusters (same data and parameters). Change filters or k to re-cluster.")
+                        else:
+                            try:
+                                if len(available_features) >= 2:
+                                    # Prepare data
+                                    X = df_vis[available_features].fillna(0)
+                                    
+                                    # Standardize features
+                                    scaler = StandardScaler()
+                                    X_scaled = scaler.fit_transform(X)
+                                    
+                                    # Use model_day1.py clustering function
+                                    artifacts, fig = cluster_and_plot(
+                                        df_vis,
+                                        X_scaled,
+                                        feature_cols=available_features,
+                                        n_clusters=int(n_clusters),
+                                        random_state=42
+                                    )
+                                    
+                                    # Update session state with clustered dataframe
+                                    st.session_state['df_filtered'] = artifacts.df_clustered.copy()
+                                    st.session_state['pca_fig'] = fig  # Store for later visualization
+                                    st.session_state['cluster_cache_key'] = cache_key  # Save cache key
+                                    st.success(f"✅ Created {n_clusters} clusters with {len(available_features)} features!")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Not enough features. Found: {available_features}")
+                            except Exception as e:
+                                st.error(f"Clustering failed: {str(e)}")
+                                import traceback
+                                st.code(traceback.format_exc())
 
                 if 'Cluster' in df_vis.columns:
                     profile_df = build_cluster_profile(
@@ -536,20 +604,23 @@ if uploaded_file is not None:
                         for field in important_fields:
                             if field in df_vis.columns:
                                 value = selected_row[field]
-                                # Format numeric values
+                                # Format numeric values and ensure all values are strings
                                 if field in ['Revenue (USD)', 'Employees Total', 'Year Found']:
-                                    value = f"{value:,.0f}" if pd.notna(value) and value != 'N/A' else value
+                                    value = f"{value:,.0f}" if pd.notna(value) and value != 'N/A' else str(value)
                                 elif field in ['Revenue per Employee', 'IT Spend per Employee', 'Company Age']:
-                                    value = f"{value:,.2f}" if pd.notna(value) and value != 'N/A' else value
+                                    value = f"{value:,.2f}" if pd.notna(value) and value != 'N/A' else str(value)
                                 elif field == 'Tech Intensity Score':
-                                    value = f"{value:.3f}" if pd.notna(value) and value != 'N/A' else value
+                                    value = f"{value:.3f}" if pd.notna(value) and value != 'N/A' else str(value)
+                                else:
+                                    # Convert all other values to string
+                                    value = str(value) if pd.notna(value) else 'N/A'
                                 
                                 table_data.append({'Metric': field, 'Value': value})
                         
                         # Display as dataframe
                         if table_data:
                             info_df = pd.DataFrame(table_data)
-                            st.dataframe(info_df, use_container_width=True, hide_index=True)
+                            st.dataframe(info_df, width='stretch', hide_index=True)
 
                         # Radar chart placeholder
                         if 'Cluster' in df_vis.columns:
@@ -583,7 +654,7 @@ if uploaded_file is not None:
                                         x=0.5
                                     )
                                 )
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig, width='stretch')
                                 st.caption("📈 Normalized metrics (0–1 scale) – higher = better relative performance")
                             except Exception as e:
                                 st.error(f"Failed to create radar chart: {str(e)}")

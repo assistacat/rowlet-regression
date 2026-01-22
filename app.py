@@ -510,7 +510,7 @@ if uploaded_file is not None:
                             # Sort by score descending and take top 5
                             anomalies.sort(key=lambda x: x[2], reverse=True)
                             for name, duns, score, flags in anomalies[:5]:
-                                st.markdown(f"**{name}** (DUNS: {duns}) – Anomaly Score: **{score:.2f}**")
+                                st.markdown(f"{name} (DUNS: {duns}) – Anomaly Score: {score:.2f}")
                                 st.caption(f"🔍 Unusual metrics: {', '.join(flags)}")
                         else:
                             st.info("✅ No significant anomalies detected in filtered data.")

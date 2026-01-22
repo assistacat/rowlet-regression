@@ -252,8 +252,12 @@ def make_radar_fig(
             comp_norm.append(0.5)
             clus_norm.append(0.5)
         else:
-            comp_norm.append((cv2 - mn) / (mx - mn))
-            clus_norm.append((gv2 - mn) / (mx - mn))
+            comp_normalized = (cv2 - mn) / (mx - mn)
+            clus_normalized = (gv2 - mn) / (mx - mn)
+            
+            # Apply minimum threshold of 0.2 to ensure all points are visible
+            comp_norm.append(max(0.2, comp_normalized))
+            clus_norm.append(max(0.2, clus_normalized))
 
     # Close the loop for radar
     labels_loop = labels + [labels[0]]

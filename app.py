@@ -3,8 +3,12 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from data_prep import clean_data
-from insights import build_cluster_profile, ensure_derived_metrics, make_radar_fig
+from insights import build_cluster_profile, ensure_derived_metrics, make_radar_fig, compute_anomaly_score
 from model_day1 import cluster_and_plot
+from groq import Groq
+
+# Initalise Groq client
+client = Groq(api_key=st.secrets.get("GROQ_API_KEY"))
 
 # set page configuration for wide layout and title
 st.set_page_config(page_title="Company Intelligence Prototype", layout="wide")
@@ -281,10 +285,9 @@ if uploaded_file is not None:
             with col_left:
                 st.subheader("Cluster Overview")
                 
-                # Ensure derived metrics (preserve existing columns like Cluster)
-                if 'Cluster' not in df_vis.columns:
-                    df_vis = ensure_derived_metrics(df_vis)
-                    st.session_state['df_filtered'] = df_vis
+                # Always ensure derived metrics exist (Company Age, Revenue per Employee, etc.)
+                df_vis = ensure_derived_metrics(df_vis)
+                st.session_state['df_filtered'] = df_vis
 
                 # Clustering button
                 col_button, col_param = st.columns([1, 1])
@@ -379,6 +382,48 @@ if uploaded_file is not None:
                     # Display PCA scatter plot if available
                     if 'pca_fig' in st.session_state:
                         st.plotly_chart(st.session_state['pca_fig'], width='stretch')
+                    
+                    # Top Anomalies / Watch List
+                    st.markdown("---")
+                    st.markdown("### 🚨 Top Anomalies / Watch List")
+                    st.caption("Companies with unusual patterns compared to their cluster")
+                    
+                    with st.spinner("Analyzing anomalies..."):
+                        anomalies = []
+                        # Sample companies for speed - check first 50 or all if fewer
+                        sample_size = min(50, len(df_vis))
+                        sample_companies = df_vis['DUNS Number'].unique()[:sample_size]
+                        
+                        for duns in sample_companies:
+                            try:
+                                anomaly_df = compute_anomaly_score(df_vis, company_id=duns)
+                                # Get high anomalies (z-score > 2 or < -2)
+                                high_anomalies = anomaly_df[anomaly_df['Z-Score'].abs() > 2]
+                                
+                                if not high_anomalies.empty:
+                                    avg_score = high_anomalies['Z-Score'].abs().mean()
+                                    flags = high_anomalies['Metric'].tolist()
+                                    
+                                    # Get company name
+                                    company_row = df_vis[df_vis['DUNS Number'] == duns].iloc[0]
+                                    name = duns
+                                    for col in ['Company Name', 'Company', 'Name', 'Company Sites']:
+                                        if col in df_vis.columns:
+                                            name = company_row[col]
+                                            break
+                                    
+                                    anomalies.append((name, duns, avg_score, flags))
+                            except:
+                                continue
+                        
+                        if anomalies:
+                            # Sort by score descending and take top 5
+                            anomalies.sort(key=lambda x: x[2], reverse=True)
+                            for name, duns, score, flags in anomalies[:5]:
+                                st.markdown(f"**{name}** (DUNS: {duns}) – Anomaly Score: **{score:.2f}**")
+                                st.caption(f"🔍 Unusual metrics: {', '.join(flags)}")
+                        else:
+                            st.info("✅ No significant anomalies detected in filtered data.")
                 else:
                     st.info("Clustering not yet applied — summary table will appear here once clustering is applied.")
 
@@ -444,6 +489,46 @@ if uploaded_file is not None:
                             st.write(f"DUNS: {selected_duns}")
                             st.caption("Note: No company name column found in dataset")
 
+                        # Company Information Table
+                        st.subheader("📊 Company Information")
+                        selected_row = df_vis[df_vis['DUNS Number'] == selected_duns].iloc[0]
+                        
+                        # Define important fields to display
+                        important_fields = [
+                            'Revenue (USD)',
+                            'Employees Total',
+                            'Company Age',
+                            'Year Found',
+                            'Revenue per Employee',
+                            'IT Spend per Employee',
+                            'Tech Intensity Score',
+                            'Country',
+                            'NAICS Description',
+                            'Ownership Type',
+                            'Entity Type',
+                            'Cluster'
+                        ]
+                        
+                        # Build table data with available fields
+                        table_data = []
+                        for field in important_fields:
+                            if field in df_vis.columns:
+                                value = selected_row[field]
+                                # Format numeric values
+                                if field in ['Revenue (USD)', 'Employees Total', 'Year Found']:
+                                    value = f"{value:,.0f}" if pd.notna(value) and value != 'N/A' else value
+                                elif field in ['Revenue per Employee', 'IT Spend per Employee', 'Company Age']:
+                                    value = f"{value:,.2f}" if pd.notna(value) and value != 'N/A' else value
+                                elif field == 'Tech Intensity Score':
+                                    value = f"{value:.3f}" if pd.notna(value) and value != 'N/A' else value
+                                
+                                table_data.append({'Metric': field, 'Value': value})
+                        
+                        # Display as dataframe
+                        if table_data:
+                            info_df = pd.DataFrame(table_data)
+                            st.dataframe(info_df, use_container_width=True, hide_index=True)
+
                         # Radar chart placeholder
                         if 'Cluster' in df_vis.columns:
                             try:
@@ -479,6 +564,74 @@ if uploaded_file is not None:
                                 st.plotly_chart(fig, width='stretch')
                             except Exception as e:
                                 st.error(f"Failed to create radar chart: {str(e)}")
+                            
+                            # AI Business Insight Section
+                            with st.expander("AI Business Insight", expanded=False):
+                                if st.button("Generate Insight", key=f"insight_{selected_duns}", type="primary"):
+                                    with st.spinner("Analyzing company..."):
+                                        try:
+                                            # Get selected row as dict
+                                            selected_row = df_vis[df_vis['DUNS Number'] == selected_duns].iloc[0]
+                                            row_dict = selected_row.to_dict()
+
+                                            # Get cluster average (re-compute profile or use existing)
+                                            profile_df = build_cluster_profile(df_vis)
+                                            cluster_value = selected_row['Cluster']  # Use cluster value as-is
+                                            
+                                            # Find matching cluster in profile
+                                            cluster_match = profile_df[profile_df['Cluster'] == cluster_value]
+                                            if cluster_match.empty:
+                                                st.warning(f"Cluster {cluster_value} not found in profile data.")
+                                            else:
+                                                cluster_mean = cluster_match.iloc[0].to_dict()
+
+                                                # Optional anomaly info
+                                                try:
+                                                    anomaly_df = compute_anomaly_score(df_vis, company_id=selected_duns)
+                                                    # Get top anomalies (z-score > 2 or < -2)
+                                                    high_anomalies = anomaly_df[anomaly_df['Z-Score'].abs() > 2]
+                                                    if not high_anomalies.empty:
+                                                        flags = high_anomalies['Metric'].tolist()
+                                                        avg_score = high_anomalies['Z-Score'].abs().mean()
+                                                        anomaly_text = f"Anomaly score: {avg_score:.1f} | Flags: {', '.join(flags)}"
+                                                    else:
+                                                        anomaly_text = "No anomalies detected."
+                                                except:
+                                                    anomaly_text = "Anomaly analysis unavailable."
+
+                                                # Prompt (action-oriented, commercial focus)
+                                                prompt = f"""
+                                                    You are an expert business analyst specializing in firmographic and operational intelligence.
+                                                    Company data: {row_dict}
+                                                    Cluster average: {cluster_mean}
+                                                    {anomaly_text}
+
+                                                    Provide a concise 120–180 word professional summary:
+                                                    - Typical company profile
+                                                    - Key strengths and competitive advantages
+                                                    - Potential risks or areas for concern
+                                                    - How it compares to similar companies in its cluster
+
+                                                    End with 1–2 actionable commercial recommendations for different stakeholders:
+                                                    - Sales/upsell opportunity
+                                                    - Investment/acquisition interest
+                                                    - Risk management note
+
+                                                    Tone: confident, data-driven, business-oriented. No hallucinations — stick to provided data.
+                                                    """
+
+                                                response = client.chat.completions.create(
+                                                    model="llama-3.3-70b-versatile",  # or "mixtral-8x7b-32768" for faster/cheaper
+                                                    messages=[{"role": "user", "content": prompt}],
+                                                    max_tokens=300,
+                                                    temperature=0.6
+                                                )
+
+                                                summary = response.choices[0].message.content.strip()
+                                                st.markdown(summary)
+                                        except Exception as e:
+                                            st.error(f"Insight generation failed: {str(e)}")
+                                            st.caption("Check GROQ_API_KEY in secrets or try again.")
                         else:
                             st.info("Clustering not yet applied — radar chart will appear here once clusters exist.")
                 else:

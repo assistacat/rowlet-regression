@@ -36,13 +36,16 @@ def clean_data(df):
     if 'Country' in df_clean.columns:
         df_clean['Country'] = df_clean['Country'].astype(str).str.strip().str.upper()
 
-    # Convert object columns to string to avoid Arrow serialization issues
+    # Handle NaN in object/string columns only (preserve numeric columns)
     for col in df_clean.select_dtypes(include=['object']).columns:
-        df_clean[col] = df_clean[col].astype(str)
-
-    # Handle many edge-cases gracefully: Add "N/A" for missing
-    # This prevents the LLM from choking on 'None' or 'NaN' values
-    df_clean = df_clean.fillna("N/A")
+        # Fill NaN with "N/A" for object columns
+        df_clean[col] = df_clean[col].fillna("N/A").astype(str)
+    
+    # For numeric columns, ensure no remaining NaN (should already be handled by median imputation above)
+    numeric_cols = df_clean.select_dtypes(include=['number']).columns
+    for col in numeric_cols:
+        if df_clean[col].isna().any():
+            df_clean[col] = df_clean[col].fillna(0)
 
     return df_clean
 

@@ -1,16 +1,3 @@
-# insights.py
-# Person 4 (Insights) — Day 2 aligned with app.py
-#
-# Required by app.py:
-#   - ensure_derived_metrics(df)
-#   - build_cluster_profile(df, cluster_col="Cluster", metrics=[...], extra_group_cols=[...])
-#   - make_radar_fig(df, company_id, id_col="DUNS Number", cluster_col="Cluster",
-#                    metrics=[...], company_name_col="Company Sites")
-#
-# Optional helpers:
-#   - compute_anomaly_score(...)
-#   - quick_business_take(...)
-
 from __future__ import annotations
 
 from datetime import datetime

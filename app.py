@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from datetime import datetime
 from sklearn.preprocessing import StandardScaler
 from data_prep import clean_data
 from insights import build_cluster_profile, ensure_derived_metrics, make_radar_fig, compute_anomaly_score
@@ -13,8 +14,20 @@ client = Groq(api_key=st.secrets.get("GROQ_API_KEY"))
 # set page configuration for wide layout and title
 st.set_page_config(page_title="Company Intelligence Prototype", layout="wide")
 
-# main title
-st.title("Company Intelligence Prototype")
+# Custom theme and styling
+st.markdown("""
+<style>
+.stApp { background-color: #0e1117; color: white; }
+.stButton>button { background-color: #4CAF50; color: white; }
+</style>
+""", unsafe_allow_html=True)
+
+# Main header with description
+st.markdown("""
+### 🎯 AI-Driven Company Intelligence Prototype
+Upload firmographic data → filter → cluster → explore peers → get AI insights.  
+**Built for the Champions Group Datathon** – turns raw data into actionable intelligence.
+""")
 
 # Sidebar for data and filters
 st.sidebar.header("Data and Filters")
@@ -257,6 +270,15 @@ if uploaded_file is not None:
         st.session_state['df_filtered'] = df_filtered
         st.sidebar.metric("Filtered Companies", len(df_filtered))
 
+    # Quick stats row
+    st.markdown("---")
+    cols = st.columns(4)
+    cols[0].metric("Filtered Companies", len(st.session_state['df_filtered']))
+    cols[1].metric("Clusters Found", len(st.session_state['df_filtered']['Cluster'].unique()) if 'Cluster' in st.session_state['df_filtered'].columns else 0)
+    cols[2].metric("Avg Revenue", f"${st.session_state['df_filtered']['Revenue (USD)'].mean():,.0f}" if 'Revenue (USD)' in st.session_state['df_filtered'].columns else "N/A")
+    cols[3].metric("Avg Employees", f"{st.session_state['df_filtered']['Employees Total'].mean():,.0f}" if 'Employees Total' in st.session_state['df_filtered'].columns else "N/A")
+    st.markdown("---")
+
     # Show a preview of the first few rows
     st.subheader("Data Preview (Filtered)")
     st.dataframe(st.session_state['df_filtered'].head(10))
@@ -283,7 +305,7 @@ if uploaded_file is not None:
             col_left, col_right = st.columns([3, 2])
 
             with col_left:
-                st.subheader("Cluster Overview")
+                st.subheader("📊 Cluster Benchmarking & Distribution")
                 
                 # Always ensure derived metrics exist (Company Age, Revenue per Employee, etc.)
                 df_vis = ensure_derived_metrics(df_vis)
@@ -428,7 +450,7 @@ if uploaded_file is not None:
                     st.info("Clustering not yet applied — summary table will appear here once clustering is applied.")
 
             with col_right:
-                st.subheader("Company Detail")
+                st.subheader("🔍 Selected Company vs Cluster Comparison")
                 
                 # Company selector – use DUNS Number as unique ID
                 if 'DUNS Number' in df_vis.columns:
@@ -561,13 +583,32 @@ if uploaded_file is not None:
                                         x=0.5
                                     )
                                 )
-                                st.plotly_chart(fig, width='stretch')
+                                st.plotly_chart(fig, use_container_width=True)
+                                st.caption("📈 Normalized metrics (0–1 scale) – higher = better relative performance")
                             except Exception as e:
                                 st.error(f"Failed to create radar chart: {str(e)}")
                             
                             # AI Business Insight Section
                             with st.expander("AI Business Insight", expanded=False):
-                                if st.button("Generate Insight", key=f"insight_{selected_duns}", type="primary"):
+                                # Initialize insights storage in session state
+                                if 'ai_insights' not in st.session_state:
+                                    st.session_state['ai_insights'] = {}
+                                
+                                # Check if insight already exists for this company
+                                has_existing_insight = selected_duns in st.session_state['ai_insights']
+                                
+                                # Display existing insight if available
+                                if has_existing_insight:
+                                    insight_data = st.session_state['ai_insights'][selected_duns]
+                                    st.markdown(insight_data['text'])
+                                    st.caption(f"🕒 Generated on: {insight_data['timestamp']}")
+                                    st.markdown("---")
+                                    generate_button = st.button("🔄 Regenerate Insight", key=f"regenerate_{selected_duns}", type="secondary")
+                                else:
+                                    generate_button = st.button("✨ Generate Insight", key=f"generate_{selected_duns}", type="primary")
+                                
+                                # Generate or regenerate insight
+                                if generate_button:
                                     with st.spinner("Analyzing company..."):
                                         try:
                                             # Get selected row as dict
@@ -628,7 +669,15 @@ if uploaded_file is not None:
                                                 )
 
                                                 summary = response.choices[0].message.content.strip()
-                                                st.markdown(summary)
+                                                
+                                                # Save insight with timestamp to session state
+                                                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                                st.session_state['ai_insights'][selected_duns] = {
+                                                    'text': summary,
+                                                    'timestamp': timestamp
+                                                }
+                                                
+                                                st.rerun()
                                         except Exception as e:
                                             st.error(f"Insight generation failed: {str(e)}")
                                             st.caption("Check GROQ_API_KEY in secrets or try again.")

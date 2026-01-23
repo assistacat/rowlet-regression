@@ -4,6 +4,8 @@
 
 A universal tool designed for lead generation, company segmentation, and competitive intelligence. Upload firmographic data → filter → cluster → explore peers → get AI-powered insights.
 
+Deployment Link : https://rowlet-regression.streamlit.app/
+
 ## ✨ Features
 
 - **Smart Data Processing**: Automated cleaning and validation of firmographic data
